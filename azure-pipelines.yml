@@ -1,7 +1,7 @@
 variables:
   TARGET_REPO_URL: 'https://github.com/roshni-aldrin/javaFiles'
   TARGET_BRANCH: 'main'
-  CARBON_THRESHOLD: '0.50'
+  CARBON_THRESHOLD: '10'
 
 trigger:
 - main
@@ -45,7 +45,7 @@ steps:
       exit 1
     fi
 
-    score=$(echo "$http_body" | jq -r '.score // .data.score // .result.score // empty')
+    score=$(echo "$http_body" | jq -r '.summary.total_carbon_g')
 
     if [ -z "$score" ] || [ "$score" = "null" ]; then
       echo "##vso[task.logissue type=error]Score not found in response!"
