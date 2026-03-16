@@ -1,3 +1,8 @@
+variables:
+  TARGET_REPO_URL: 'https://github.com/roshni-aldrin/javaFiles'
+  TARGET_BRANCH: 'main'
+  CARBON_THRESHOLD: '0.50'
+
 trigger:
 - main
 
@@ -6,5 +11,55 @@ pool:
 
 steps:
 - checkout: self
+
 - script: echo "Pipeline connected successfully!"
   displayName: "Test pipeline"
+
+- bash: |
+    set -euo pipefail
+    echo "🌿 Calling Carbon Score API (POST)..."
+
+    API_URL="https://greencode-bsg9gqg2dfebamdg.eastus-01.azurewebsites.net/analyze/repo"
+
+    payload=$(jq -n \
+      --arg repo "$(TARGET_REPO_URL)" \
+      --arg branch "$(TARGET_BRANCH)" \
+      '{repo_url: $repo, branch: $branch, git_username: null, git_token: null}')
+
+    echo "Request Payload:"
+    echo "$payload"
+
+    response=$(curl -sS -w "\n%{http_code}" -X POST \
+      -H "Content-Type: application/json" \
+      -d "$payload" \
+      "$API_URL")
+
+    http_body=$(echo "$response" | head -n -1)
+    http_code=$(echo "$response" | tail -n1)
+
+    echo "HTTP Status: $http_code"
+    echo "API Response: $http_body"
+
+    if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+      echo "##vso[task.logissue type=error]API call failed with HTTP $http_code"
+      exit 1
+    fi
+
+    score=$(echo "$http_body" | jq -r '.score // .data.score // .result.score // empty')
+
+    if [ -z "$score" ] || [ "$score" = "null" ]; then
+      echo "##vso[task.logissue type=error]Score not found in response!"
+      exit 1
+    fi
+
+    echo "Carbon Score = $score"
+
+    fail=$(awk -v s="$score" -v t="$(CARBON_THRESHOLD)" 'BEGIN { if (s>t) print 1; else print 0 }')
+
+    if [ "$fail" -eq 1 ]; then
+      echo "##vso[task.logissue type=error]Carbon score $score exceeds threshold $(CARBON_THRESHOLD)"
+      exit 1
+    fi
+
+    echo "✅ Score within threshold. Pipeline successful!"
+  displayName: "Carbon Score Check (POST)"
