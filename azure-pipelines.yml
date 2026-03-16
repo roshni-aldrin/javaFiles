@@ -17,7 +17,7 @@ steps:
 
 - bash: |
     set -euo pipefail
-    echo "🌿 Calling Carbon Score API (POST)..."
+    echo " Calling Carbon Score API (POST)..."
 
     API_URL="https://greencode-bsg9gqg2dfebamdg.eastus-01.azurewebsites.net/analyze/repo"
 
@@ -61,5 +61,5 @@ steps:
       exit 1
     fi
 
-    echo "✅ Score within threshold. Pipeline successful!"
+    echo " Score within threshold. Pipeline successful!"
   displayName: "Carbon Score Check (POST)"
