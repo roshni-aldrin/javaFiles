@@ -7,7 +7,7 @@ pool:
 variables:
   TARGET_REPO_URL: 'https://github.com/roshni-aldrin/javaFiles'
   TARGET_BRANCH: 'main'
-  CARBON_THRESHOLD: '3'
+  CARBON_THRESHOLD: '5'
 
 steps:
 
