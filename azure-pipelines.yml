@@ -1,6 +1,9 @@
 trigger:
 - main
 
+pr:
+- main
+
 pool:
   vmImage: ubuntu-latest
 
@@ -18,70 +21,124 @@ parameters:
 variables:
   CARBON_THRESHOLD: '5'
 
-steps:
 
-# 1. Checkout
-- checkout: self
-  displayName: "Checkout Source Code"
+# ============================================================
+#                     PIPELINE STAGES
+# ============================================================
+stages:
 
-# 2. Carbon Score Quality Gate
-- bash: |
-    set -euo pipefail
-    echo "Running Carbon Score Quality Gate..."
 
-    API_URL="https://greencode-bsg9gqg2dfebamdg.eastus-01.azurewebsites.net/analyze/repo"
+# ------------------------------------------------------------
+# 1. Carbon Analysis Stage
+# ------------------------------------------------------------
+- stage: CarbonGate
+  displayName: "Carbon Score Quality Gate"
+  jobs:
+  - job: CarbonCheck
+    displayName: "Run Carbon Score API"
+    steps:
 
-    payload=$(jq -n \
-      --arg repo "${{ parameters.repoUrl }}" \
-      --arg branch "${{ parameters.branch }}" \
-      '{repo_url: $repo, branch: $branch, git_username: null, git_token: null}')
+    - checkout: self
 
-    response=$(curl -sS -w "\n%{http_code}" -X POST \
-      -H "Content-Type: application/json" \
-      -d "$payload" \
-      "$API_URL")
+    - bash: |
+        set -euo pipefail
+        echo "Calling Carbon Score API..."
 
-    http_body=$(echo "$response" | head -n -1)
-    http_code=$(echo "$response" | tail -n1)
+        API_URL="https://greencode-bsg9gqg2dfebamdg.eastus-01.azurewebsites.net/analyze/repo"
 
-    echo "HTTP Status: $http_code"
+        payload=$(jq -n \
+          --arg repo "${{ parameters.repoUrl }}" \
+          --arg branch "${{ parameters.branch }}" \
+          '{repo_url: $repo, branch: $branch, git_username: null, git_token: null}')
 
-    if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-      echo "##vso[task.logissue type=error]API call failed with HTTP $http_code"
-      exit 1
-    fi
+        response=$(curl -sS -w "\n%{http_code}" -X POST \
+          -H "Content-Type: application/json" \
+          -d "$payload" \
+          "$API_URL")
 
-    score=$(echo "$http_body" | jq -r '.summary.total_carbon_g')
+        http_body=$(echo "$response" | head -n -1)
+        http_code=$(echo "$response" | tail -n1)
 
-    if [ -z "$score" ] || [ "$score" = "null" ]; then
-      echo "##vso[task.logissue type=error]Carbon score not found"
-      exit 1
-    fi
+        if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+          echo "##vso[task.logissue type=error]API failed with $http_code"
+          exit 1
+        fi
 
-    echo "Carbon Score: $score grams"
+        score=$(echo "$http_body" | jq -r '.summary.total_carbon_g')
 
-    fail=$(awk -v s="$score" -v t="$(CARBON_THRESHOLD)" 'BEGIN { if (s>t) print 1; else print 0 }')
+        if [ -z "$score" ] || [ "$score" = "null" ]; then
+          echo "##vso[task.logissue type=error]Score missing"
+          exit 1
+        fi
 
-    if [ "$fail" -eq 1 ]; then
-      echo "##vso[task.logissue type=error]Carbon score $score exceeds threshold $(CARBON_THRESHOLD)"
-      exit 1
-    fi
+        echo "$http_body" > carbon-report.json
+        echo "Carbon Score: $score"
 
-    echo "Carbon score within limits."
-  displayName: " Carbon Score Quality Gate"
+        fail=$(awk -v s="$score" -v t="$(CARBON_THRESHOLD)" 'BEGIN { if (s>t) print 1; else print 0 }')
 
-# 3. Build (runs only if Carbon score passed)
-- script: |
-    echo "Running build..."
+        if [ "$fail" -eq 1 ]; then
+          echo "##vso[task.logissue type=error]Carbon score $score exceeds threshold $(CARBON_THRESHOLD)"
+          exit 1
+        fi
+
+        echo "Score within limit."
+      displayName: "Run Carbon API"
+
+    - publish: carbon-report.json
+      artifact: carbon-report
+      displayName: "Publish Carbon Report"
+
+    # PR Comment
+    - bash: |
+        if [ "$(System.PullRequest.PullRequestNumber)" != "" ]; then
+          PR=$(System.PullRequest.PullRequestNumber)
+          REPO=$(Build.Repository.Name)
+          COMMENT="Carbon Score: $score grams. Threshold: $(CARBON_THRESHOLD)."
+          ./post-comment.sh "$PR" "$REPO" "$COMMENT"
+        fi
+      env:
+        GITHUB_TOKEN: $(GITHUB_TOKEN)
+      displayName: "Post Carbon Score PR Comment"
+
+
+# ------------------------------------------------------------
+# 2. Build Stage (runs only if carbon gate passed)
+# ------------------------------------------------------------
+- stage: Build
   displayName: "Build Project"
+  dependsOn: CarbonGate
   condition: succeeded()
+  jobs:
+  - job: BuildJob
+    steps:
+    - script: |
+        echo "Building project..."
+      displayName: "Build"
 
-# 4. Test
-- script: echo "Running tests..."
+
+# ------------------------------------------------------------
+# 3. Tests Stage
+# ------------------------------------------------------------
+- stage: Test
   displayName: "Run Tests"
+  dependsOn: Build
   condition: succeeded()
+  jobs:
+  - job: TestJob
+    steps:
+    - script: echo "Running tests..."
+      displayName: "Run Tests"
 
-# 5. Deploy
-- script: echo "Deploying..."
-  displayName: "Deploy Application"
+
+# ------------------------------------------------------------
+# 4. Deploy Stage
+# ------------------------------------------------------------
+- stage: Deploy
+  displayName: "Deploy"
+  dependsOn: Test
   condition: succeeded()
+  jobs:
+  - job: DeployJob
+    steps:
+    - script: echo "Deploying application..."
+      displayName: "Deploy Application"
