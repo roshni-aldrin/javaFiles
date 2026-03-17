@@ -4,16 +4,27 @@ trigger:
 pool:
   vmImage: ubuntu-latest
 
+parameters:
+  - name: repoUrl
+    displayName: "Repository URL to Analyze"
+    type: string
+    default: "https://github.com/roshni-aldrin/javaFiles"
+
+  - name: branch
+    displayName: "Branch"
+    type: string
+    default: "main"
+
 variables:
-  TARGET_REPO_URL: 'https://github.com/roshni-aldrin/javaFiles'
-  TARGET_BRANCH: 'main'
   CARBON_THRESHOLD: '5'
 
 steps:
 
+# 1. Checkout
 - checkout: self
   displayName: "Checkout Source Code"
 
+# 2. Carbon Score Quality Gate
 - bash: |
     set -euo pipefail
     echo "Running Carbon Score Quality Gate..."
@@ -21,8 +32,8 @@ steps:
     API_URL="https://greencode-bsg9gqg2dfebamdg.eastus-01.azurewebsites.net/analyze/repo"
 
     payload=$(jq -n \
-      --arg repo "$(TARGET_REPO_URL)" \
-      --arg branch "$(TARGET_BRANCH)" \
+      --arg repo "${{ parameters.repoUrl }}" \
+      --arg branch "${{ parameters.branch }}" \
       '{repo_url: $repo, branch: $branch, git_username: null, git_token: null}')
 
     response=$(curl -sS -w "\n%{http_code}" -X POST \
@@ -43,12 +54,11 @@ steps:
     score=$(echo "$http_body" | jq -r '.summary.total_carbon_g')
 
     if [ -z "$score" ] || [ "$score" = "null" ]; then
-      echo "##vso[task.logissue type=error]Carbon score not found in API response."
+      echo "##vso[task.logissue type=error]Carbon score not found"
       exit 1
     fi
 
-    echo "Carbon Score (grams): $score"
-    echo "Threshold: $(CARBON_THRESHOLD)"
+    echo "Carbon Score: $score grams"
 
     fail=$(awk -v s="$score" -v t="$(CARBON_THRESHOLD)" 'BEGIN { if (s>t) print 1; else print 0 }')
 
@@ -57,28 +67,21 @@ steps:
       exit 1
     fi
 
-    echo " Carbon score within acceptable limits."
+    echo "Carbon score within limits."
   displayName: " Carbon Score Quality Gate"
 
+# 3. Build (runs only if Carbon score passed)
 - script: |
-    echo "Starting build..."
-    # Example for Java:
-    # mvn clean package
-    # Or for Gradle:
-    # ./gradlew build
+    echo "Running build..."
   displayName: "Build Project"
-  condition: succeeded()     # runs ONLY if carbon gate passed
+  condition: succeeded()
 
-- script: |
-    echo "Running tests..."
-    # Example:
-    # mvn test
-    # ./gradlew test
+# 4. Test
+- script: echo "Running tests..."
   displayName: "Run Tests"
-  condition: succeeded()     # only run if build succeeded
+  condition: succeeded()
 
-- script: |
-    echo "Deploying application..."
-    # Add deployment commands here
+# 5. Deploy
+- script: echo "Deploying..."
   displayName: "Deploy Application"
-  condition: succeeded()     # only after successful tests
+  condition: succeeded()
