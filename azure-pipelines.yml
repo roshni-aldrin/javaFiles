@@ -14,31 +14,27 @@ parameters:
     default: "https://github.com/roshni-aldrin/javaFiles"
 
   - name: branch
-    displayName: "Branch"
+    displayName: "Branch to Analyze"
     type: string
     default: "main"
 
 variables:
   CARBON_THRESHOLD: '5'
 
-
-# ============================================================
-#                     PIPELINE STAGES
-# ============================================================
 stages:
 
-
-# ------------------------------------------------------------
-# 1. Carbon Analysis Stage
-# ------------------------------------------------------------
 - stage: CarbonGate
   displayName: "Carbon Score Quality Gate"
   jobs:
   - job: CarbonCheck
-    displayName: "Run Carbon Score API"
     steps:
 
+    # Checkout because PR script is inside Azure Repo
     - checkout: self
+
+    # Make PR comment script executable
+    - script: chmod +x scripts/post-comment.sh
+      displayName: "Set Permissions for PR Comment Script"
 
     - bash: |
         set -euo pipefail
@@ -46,11 +42,13 @@ stages:
 
         API_URL="https://greencode-bsg9gqg2dfebamdg.eastus-01.azurewebsites.net/analyze/repo"
 
+        # Build API request payload
         payload=$(jq -n \
           --arg repo "${{ parameters.repoUrl }}" \
           --arg branch "${{ parameters.branch }}" \
           '{repo_url: $repo, branch: $branch, git_username: null, git_token: null}')
 
+        # API call
         response=$(curl -sS -w "\n%{http_code}" -X POST \
           -H "Content-Type: application/json" \
           -d "$payload" \
@@ -60,83 +58,81 @@ stages:
         http_code=$(echo "$response" | tail -n1)
 
         if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-          echo "##vso[task.logissue type=error]API failed with $http_code"
+          echo "##vso[task.logissue type=error]API failed with status $http_code"
           exit 1
         fi
 
+        # Extract score
         score=$(echo "$http_body" | jq -r '.summary.total_carbon_g')
 
         if [ -z "$score" ] || [ "$score" = "null" ]; then
-          echo "##vso[task.logissue type=error]Score missing"
+          echo "##vso[task.logissue type=error]Carbon score missing in response"
           exit 1
         fi
 
+        # Write artifact
         echo "$http_body" > carbon-report.json
-        echo "Carbon Score: $score"
 
-        fail=$(awk -v s="$score" -v t="$(CARBON_THRESHOLD)" 'BEGIN { if (s>t) print 1; else print 0 }')
+        echo "Carbon Score: $score"
+        echo "Threshold: $(CARBON_THRESHOLD)"
+
+        # Compare threshold
+        fail=$(awk -v s="$score" -v t="$(CARBON_THRESHOLD)" 'BEGIN {if (s>t) print 1; else print 0}')
 
         if [ "$fail" -eq 1 ]; then
-          echo "##vso[task.logissue type=error]Carbon score $score exceeds threshold $(CARBON_THRESHOLD)"
+          echo "##vso[task.logissue type=error]Score $score exceeds threshold $(CARBON_THRESHOLD)"
           exit 1
         fi
 
-        echo "Score within limit."
-      displayName: "Run Carbon API"
+        echo "Carbon score within limit."
 
-    - publish: carbon-report.json
-      artifact: carbon-report
-      displayName: "Publish Carbon Report"
+        # Extract owner/repo from user input URL
+        repo_full="${{ parameters.repoUrl }}"
+        repo_full=${repo_full#https://github.com/}
+        repo_full=${repo_full%.git}
 
-    # PR Comment
-    - bash: |
+        # If pipeline was triggered by PR, comment on the PR
         if [ "$(System.PullRequest.PullRequestNumber)" != "" ]; then
-          PR=$(System.PullRequest.PullRequestNumber)
-          REPO=$(Build.Repository.Name)
-          COMMENT="Carbon Score: $score grams. Threshold: $(CARBON_THRESHOLD)."
-          ./post-comment.sh "$PR" "$REPO" "$COMMENT"
+          PR_NUMBER=$(System.PullRequest.PullRequestNumber)
+
+          COMMENT="### ♻️ Carbon Score Report\n**Score:** $score g\n**Threshold:** $(CARBON_THRESHOLD) g\n**Status:** PASSED"
+
+          echo "Posting comment to PR #$PR_NUMBER in $repo_full"
+
+          ./scripts/post-comment.sh "$PR_NUMBER" "$repo_full" "$COMMENT"
         fi
       env:
         GITHUB_TOKEN: $(GITHUB_TOKEN)
-      displayName: "Post Carbon Score PR Comment"
+      displayName: "Run Carbon API and Post PR Comment"
 
+    - publish: carbon-report.json
+      artifact: carbon-report
+      displayName: "Publish Carbon Report Artifact"
 
-# ------------------------------------------------------------
-# 2. Build Stage (runs only if carbon gate passed)
-# ------------------------------------------------------------
 - stage: Build
-  displayName: "Build Project"
   dependsOn: CarbonGate
   condition: succeeded()
+  displayName: "Build Stage"
   jobs:
   - job: BuildJob
     steps:
-    - script: |
-        echo "Building project..."
+    - script: echo "Building project..."
       displayName: "Build"
 
-
-# ------------------------------------------------------------
-# 3. Tests Stage
-# ------------------------------------------------------------
 - stage: Test
-  displayName: "Run Tests"
   dependsOn: Build
   condition: succeeded()
+  displayName: "Test Stage"
   jobs:
   - job: TestJob
     steps:
     - script: echo "Running tests..."
       displayName: "Run Tests"
 
-
-# ------------------------------------------------------------
-# 4. Deploy Stage
-# ------------------------------------------------------------
 - stage: Deploy
-  displayName: "Deploy"
   dependsOn: Test
   condition: succeeded()
+  displayName: "Deploy Stage"
   jobs:
   - job: DeployJob
     steps:
