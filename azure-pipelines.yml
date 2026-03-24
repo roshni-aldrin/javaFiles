@@ -37,8 +37,8 @@ stages:
         ls -R "$(Build.SourcesDirectory)"
       displayName: "DEBUG: Show Repo Structure"
 
-    # ✅ Try to make script executable (path will be corrected after debug)
-    - script: chmod +x "$(Build.SourcesDirectory)/scripts/post-comment.sh"
+    # ✅ Corrected path: Scripts (capital S)
+    - script: chmod +x "$(Build.SourcesDirectory)/Scripts/post-comment.sh"
       displayName: "Set Permissions for PR Comment Script"
 
     - bash: |
@@ -97,7 +97,8 @@ stages:
 
           echo "Posting comment to PR #$PR_NUMBER in $repo_full"
 
-          "$(Build.SourcesDirectory)/scripts/post-comment.sh" "$PR_NUMBER" "$repo_full" "$COMMENT"
+          # ✅ Corrected path here also
+          "$(Build.SourcesDirectory)/Scripts/post-comment.sh" "$PR_NUMBER" "$repo_full" "$COMMENT"
         fi
       env:
         GITHUB_TOKEN: $(GITHUB_TOKEN)
