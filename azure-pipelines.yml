@@ -29,10 +29,15 @@ stages:
   - job: CarbonCheck
     steps:
 
-    # Checkout because PR script is inside Azure Repo
     - checkout: self
 
-    # Make PR comment script executable
+    # ✅ Debug: Show actual repo folder structure on the agent
+    - bash: |
+        echo "=== REPO ROOT CONTENTS ==="
+        ls -R "$(Build.SourcesDirectory)"
+      displayName: "DEBUG: Show Repo Structure"
+
+    # ✅ Try to make script executable (path will be corrected after debug)
     - script: chmod +x "$(Build.SourcesDirectory)/scripts/post-comment.sh"
       displayName: "Set Permissions for PR Comment Script"
 
@@ -42,13 +47,11 @@ stages:
 
         API_URL="https://greencode-bsg9gqg2dfebamdg.eastus-01.azurewebsites.net/analyze/repo"
 
-        # Build API request payload
         payload=$(jq -n \
           --arg repo "${{ parameters.repoUrl }}" \
           --arg branch "${{ parameters.branch }}" \
           '{repo_url: $repo, branch: $branch, git_username: null, git_token: null}')
 
-        # API call
         response=$(curl -sS -w "\n%{http_code}" -X POST \
           -H "Content-Type: application/json" \
           -d "$payload" \
@@ -62,7 +65,6 @@ stages:
           exit 1
         fi
 
-        # Extract score
         score=$(echo "$http_body" | jq -r '.summary.total_carbon_g')
 
         if [ -z "$score" ] || [ "$score" = "null" ]; then
@@ -70,13 +72,11 @@ stages:
           exit 1
         fi
 
-        # Write artifact
         echo "$http_body" > carbon-report.json
 
         echo "Carbon Score: $score"
         echo "Threshold: $(CARBON_THRESHOLD)"
 
-        # Compare threshold
         fail=$(awk -v s="$score" -v t="$(CARBON_THRESHOLD)" 'BEGIN {if (s>t) print 1; else print 0}')
 
         if [ "$fail" -eq 1 ]; then
@@ -86,12 +86,10 @@ stages:
 
         echo "Carbon score within limit."
 
-        # Extract owner/repo from user input URL
         repo_full="${{ parameters.repoUrl }}"
         repo_full=${repo_full#https://github.com/}
         repo_full=${repo_full%.git}
 
-        # If pipeline was triggered by PR, comment on the PR
         if [ "$(System.PullRequest.PullRequestNumber)" != "" ]; then
           PR_NUMBER=$(System.PullRequest.PullRequestNumber)
 
@@ -99,7 +97,7 @@ stages:
 
           echo "Posting comment to PR #$PR_NUMBER in $repo_full"
 
-          $(Build.SourcesDirectory)/scripts/post-comment.sh "$PR_NUMBER" "$repo_full" "$COMMENT"
+          "$(Build.SourcesDirectory)/scripts/post-comment.sh" "$PR_NUMBER" "$repo_full" "$COMMENT"
         fi
       env:
         GITHUB_TOKEN: $(GITHUB_TOKEN)
