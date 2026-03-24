@@ -33,7 +33,7 @@ stages:
     - checkout: self
 
     # Make PR comment script executable
-    - script: chmod +x scripts/post-comment.sh
+    - script: chmod +x "$(Build.SourcesDirectory)/scripts/post-comment.sh"
       displayName: "Set Permissions for PR Comment Script"
 
     - bash: |
@@ -99,7 +99,7 @@ stages:
 
           echo "Posting comment to PR #$PR_NUMBER in $repo_full"
 
-          ./scripts/post-comment.sh "$PR_NUMBER" "$repo_full" "$COMMENT"
+          $(Build.SourcesDirectory)/scripts/post-comment.sh "$PR_NUMBER" "$repo_full" "$COMMENT"
         fi
       env:
         GITHUB_TOKEN: $(GITHUB_TOKEN)
